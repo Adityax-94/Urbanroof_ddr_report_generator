@@ -1,10 +1,3 @@
-"""
-DDR Report Generator — Google Gemini (updated SDK)
-====================================================
-pip install google-genai pymupdf python-docx
-python ddr_gemini.py --inspection inspection.pdf --thermal thermal.pdf --api-key YOUR_KEY
-"""
-
 import argparse
 import base64
 import io
@@ -15,7 +8,7 @@ import time
 from pathlib import Path
 
 try:
-    import fitz  # PyMuPDF
+    import fitz
 except ImportError:
     sys.exit("Run: pip install pymupdf")
 
@@ -33,8 +26,6 @@ except ImportError:
     sys.exit("Run: pip install python-docx")
 
 
-# ── PDF helpers ───────────────────────────────────────────────────────────────
-
 def extract_text(pdf_path):
     doc = fitz.open(pdf_path)
     pages = []
@@ -47,7 +38,6 @@ def extract_text(pdf_path):
 
 
 def extract_images(pdf_path, max_images=5, min_w=200, min_h=200):
-    """Extract only the largest, most meaningful images — max 5 per document."""
     doc = fitz.open(pdf_path)
     candidates = []
     for page_num in range(len(doc)):
@@ -69,14 +59,11 @@ def extract_images(pdf_path, max_images=5, min_w=200, min_h=200):
                 "source": Path(pdf_path).stem,
             })
     doc.close()
-    # Sort by size descending, keep only top N
     candidates.sort(key=lambda x: x["size"], reverse=True)
     kept = candidates[:max_images]
     print(f"     {Path(pdf_path).name}: {len(candidates)} images found, using top {len(kept)}")
     return kept
 
-
-# ── AI call ───────────────────────────────────────────────────────────────────
 
 PROMPT = """
 You are a building diagnostics specialist. Analyze the inspection report and thermal report 
@@ -120,17 +107,12 @@ Return ONLY this JSON structure:
 def call_gemini(inspection_text, thermal_text, all_images, api_key):
     client = genai.Client(api_key=api_key)
 
-    # Build contents list
     contents = []
-
-    # Text first
     contents.append(
         f"=== INSPECTION REPORT ===\n{inspection_text}\n\n"
         f"=== THERMAL REPORT ===\n{thermal_text}\n\n"
         f"{PROMPT}"
     )
-
-    # Add images as inline bytes
     for img in all_images:
         mime = "image/jpeg" if img["ext"] in ("jpg", "jpeg") else f"image/{img['ext']}"
         contents.append(
@@ -144,8 +126,6 @@ def call_gemini(inspection_text, thermal_text, all_images, api_key):
     )
 
     raw = response.text.strip()
-
-    # Strip markdown fences if model added them
     if "```" in raw:
         parts = raw.split("```")
         for part in parts:
@@ -159,8 +139,6 @@ def call_gemini(inspection_text, thermal_text, all_images, api_key):
 
     return json.loads(raw)
 
-
-# ── Word document builder ─────────────────────────────────────────────────────
 
 SEVERITY_COLORS = {
     "Critical": RGBColor(0xC0, 0x00, 0x00),
@@ -183,12 +161,8 @@ def build_docx(ddr, all_images, out_path):
         f"Prepared by: AI Diagnostic System"
     )
     doc.add_paragraph()
-
-    # 1. Summary
     doc.add_heading("1. Property Issue Summary", 1)
     doc.add_paragraph(ddr.get("issue_summary", "Not Available"))
-
-    # 2. Area-wise Observations
     doc.add_heading("2. Area-wise Observations", 1)
     for area in ddr.get("areas", []):
         doc.add_heading(area.get("name", "Unknown Area"), 2)
@@ -216,7 +190,6 @@ def build_docx(ddr, all_images, out_path):
             p.add_run("Image references: ").bold = True
             p.add_run(" | ".join(refs))
 
-        # Embed matching image
         embedded = False
         for img in all_images:
             ref_combined = " ".join(refs).lower()
@@ -234,15 +207,12 @@ def build_docx(ddr, all_images, out_path):
             doc.add_paragraph("Image Not Available")
 
         doc.add_paragraph()
-
-    # 3. Root Causes
     doc.add_heading("3. Probable Root Cause", 1)
     for rc in ddr.get("root_causes", []):
         p = doc.add_paragraph(style="List Bullet")
         p.add_run(f"{rc.get('issue','')}: ").bold = True
         p.add_run(rc.get("cause", "Not Available"))
 
-    # 4. Severity Table
     doc.add_heading("4. Severity Assessment", 1)
     areas = ddr.get("areas", [])
     if areas:
@@ -257,19 +227,13 @@ def build_docx(ddr, all_images, out_path):
             row[2].text = area.get("severity_reason", "")
     else:
         doc.add_paragraph("Not Available")
-
-    # 5. Recommended Actions
     doc.add_heading("5. Recommended Actions", 1)
     for action in ddr.get("recommended_actions", []):
         p = doc.add_paragraph(style="List Number")
         p.add_run(action.get("action", ""))
         p.add_run(f"  [{action.get('timeline','')}]").italic = True
-
-    # 6. Additional Notes
     doc.add_heading("6. Additional Notes", 1)
     doc.add_paragraph(ddr.get("additional_notes", "Not Available"))
-
-    # 7. Missing Information
     doc.add_heading("7. Missing or Unclear Information", 1)
     missing = ddr.get("missing_information", [])
     if missing:
@@ -282,9 +246,6 @@ def build_docx(ddr, all_images, out_path):
 
     doc.save(out_path)
     print(f"✅  DDR saved to: {out_path}")
-
-
-# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="DDR Report Generator (Gemini)")

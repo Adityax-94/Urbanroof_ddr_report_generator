@@ -1,11 +1,3 @@
-"""
-DDR Report Generator v2 — Groq (free, fast, works in India)
-=============================================================
-1. Get free key at: https://console.groq.com  (Sign up → API Keys → Create)
-2. pip install groq pymupdf python-docx
-3. python ddr_groq.py --inspection inspection.pdf --thermal thermal.pdf --api-key gsk_...
-"""
-
 import argparse
 import io
 import json
@@ -14,7 +6,7 @@ import sys
 from pathlib import Path
 
 try:
-    import fitz  # PyMuPDF
+    import fitz
 except ImportError:
     sys.exit("Run: pip install pymupdf")
 
@@ -31,8 +23,6 @@ except ImportError:
     sys.exit("Run: pip install python-docx")
 
 
-# ── PDF helpers ───────────────────────────────────────────────────────────────
-
 def extract_text(pdf_path):
     doc = fitz.open(pdf_path)
     pages = []
@@ -42,12 +32,10 @@ def extract_text(pdf_path):
             pages.append(f"[PAGE {i}]\n{text}")
     doc.close()
     full = "\n\n".join(pages)
-    # Groq context limit — use 18000 chars per doc (llama-3.3-70b has 128k context)
     return full[:18000]
 
 
 def extract_images(pdf_path, max_images=6, min_w=150, min_h=150):
-    """Extract largest images — for embedding in Word doc."""
     doc = fitz.open(pdf_path)
     candidates = []
     for page_num in range(len(doc)):
@@ -73,9 +61,6 @@ def extract_images(pdf_path, max_images=6, min_w=150, min_h=150):
     kept = candidates[:max_images]
     print(f"     {Path(pdf_path).name}: {len(candidates)} images found, keeping top {len(kept)}")
     return kept
-
-
-# ── AI call ───────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are a senior building diagnostics specialist.
 Your job is to read two documents — an Inspection Report and a Thermal Report — and produce a structured DDR (Detailed Diagnostic Report).
@@ -133,20 +118,17 @@ def call_groq(inspection_text, thermal_text, api_key):
         f"Return ONLY a JSON object matching exactly this schema:\n{JSON_SCHEMA}"
     )
 
-    print("     Sending to llama-3.3-70b...")
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user",   "content": user_message}
         ],
-        max_tokens=6000,   # increased from 4000
+        max_tokens=6000,
         temperature=0.1,
     )
 
     raw = response.choices[0].message.content.strip()
-
-    # Strip markdown fences if model added them
     if "```" in raw:
         for part in raw.split("```"):
             part = part.strip()
@@ -159,8 +141,6 @@ def call_groq(inspection_text, thermal_text, api_key):
 
     return json.loads(raw)
 
-
-# ── Word document builder ─────────────────────────────────────────────────────
 
 SEVERITY_COLORS = {
     "Critical": RGBColor(0xC0, 0x00, 0x00),
@@ -178,7 +158,6 @@ SEVERITY_BG = {
 
 
 def set_cell_bg(cell, rgb):
-    """Set background color of a table cell."""
     from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
     tc = cell._tc
@@ -193,7 +172,6 @@ def set_cell_bg(cell, rgb):
 def build_docx(ddr, inspection_images, thermal_images, out_path):
     doc = Document()
 
-    # ── Page margins (slightly narrower for more content space)
     from docx.shared import Inches as In
     for section in doc.sections:
         section.top_margin    = In(1)
@@ -201,7 +179,6 @@ def build_docx(ddr, inspection_images, thermal_images, out_path):
         section.left_margin   = In(1.2)
         section.right_margin  = In(1.2)
 
-    # ── Title block
     t = doc.add_heading("Detailed Diagnostic Report (DDR)", 0)
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
@@ -213,24 +190,18 @@ def build_docx(ddr, inspection_images, thermal_images, out_path):
         f"Prepared by: AI Diagnostic System"
     ).italic = True
     doc.add_paragraph()
-
-    # ── 1. Property Issue Summary
     doc.add_heading("1. Property Issue Summary", 1)
     summary = ddr.get("issue_summary", "Not Available")
     doc.add_paragraph(summary)
     doc.add_paragraph()
-
-    # ── 2. Area-wise Observations
     doc.add_heading("2. Area-wise Observations", 1)
     areas = ddr.get("areas", [])
 
-    # Build image pool: thermal images first (more diagnostic value), then inspection
     image_pool = thermal_images + inspection_images
 
     for area_idx, area in enumerate(areas):
         doc.add_heading(area.get("name", "Unknown Area"), 2)
 
-        # Findings table for clean layout
         tbl = doc.add_table(rows=4, cols=2)
         tbl.style = "Light Grid"
         tbl.columns[0].width = Inches(1.8)
@@ -250,7 +221,6 @@ def build_docx(ddr, inspection_images, thermal_images, out_path):
 
         doc.add_paragraph()
 
-        # Severity badge paragraph
         sev = area.get("severity", "Unknown")
         p = doc.add_paragraph()
         p.add_run("Severity: ").bold = True
@@ -260,7 +230,6 @@ def build_docx(ddr, inspection_images, thermal_images, out_path):
         run.font.size = Pt(12)
         p.add_run(f"   {area.get('severity_reason', '')}")
 
-        # Embed image — pick from thermal pool first, cycle through
         if image_pool:
             img = image_pool[area_idx % len(image_pool)]
             try:
@@ -275,32 +244,26 @@ def build_docx(ddr, inspection_images, thermal_images, out_path):
 
         doc.add_paragraph()
 
-    # ── 3. Probable Root Cause
     doc.add_heading("3. Probable Root Cause", 1)
     for rc in ddr.get("root_causes", []):
         p = doc.add_paragraph(style="List Bullet")
         p.add_run(f"{rc.get('issue','')}: ").bold = True
         p.add_run(rc.get("cause", "Not Available"))
     doc.add_paragraph()
-
-    # ── 4. Severity Assessment table
     doc.add_heading("4. Severity Assessment", 1)
     if areas:
         table = doc.add_table(rows=1, cols=3)
         table.style = "Light Grid Accent 1"
-        # Header row
         hdr = table.rows[0].cells
         for cell, label in zip(hdr, ["Area", "Severity", "Reasoning"]):
             cell.text = label
             cell.paragraphs[0].runs[0].bold = True
-        # Data rows
         for area in areas:
             row = table.add_row().cells
             sev = area.get("severity", "")
             row[0].text = area.get("name", "")
             row[1].text = sev
             row[2].text = area.get("severity_reason", "")
-            # Color the severity cell
             if sev in SEVERITY_BG:
                 set_cell_bg(row[1], SEVERITY_BG[sev])
                 if row[1].paragraphs[0].runs:
@@ -309,8 +272,6 @@ def build_docx(ddr, inspection_images, thermal_images, out_path):
     else:
         doc.add_paragraph("Not Available")
     doc.add_paragraph()
-
-    # ── 5. Recommended Actions
     doc.add_heading("5. Recommended Actions", 1)
     for action in ddr.get("recommended_actions", []):
         p = doc.add_paragraph(style="List Number")
@@ -324,13 +285,9 @@ def build_docx(ddr, inspection_images, thermal_images, out_path):
             RGBColor(0x40, 0x40, 0x40)
         )
     doc.add_paragraph()
-
-    # ── 6. Additional Notes
     doc.add_heading("6. Additional Notes", 1)
     doc.add_paragraph(ddr.get("additional_notes", "Not Available"))
     doc.add_paragraph()
-
-    # ── 7. Missing or Unclear Information
     doc.add_heading("7. Missing or Unclear Information", 1)
     missing = ddr.get("missing_information", [])
     if missing:
@@ -343,9 +300,6 @@ def build_docx(ddr, inspection_images, thermal_images, out_path):
 
     doc.save(out_path)
     print(f"✅  DDR saved to: {out_path}")
-
-
-# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="DDR Report Generator v2 (Groq)")

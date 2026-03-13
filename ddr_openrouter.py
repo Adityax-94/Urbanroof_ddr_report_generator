@@ -1,11 +1,3 @@
-"""
-DDR Report Generator — OpenRouter (free, works in India)
-=========================================================
-1. Get free key at: https://openrouter.ai  (Sign up → Keys → Create)
-2. pip install openai pymupdf python-docx
-3. python ddr_openrouter.py --inspection inspection.pdf --thermal thermal.pdf --api-key sk-or-...
-"""
-
 import argparse
 import base64
 import io
@@ -15,7 +7,7 @@ import sys
 from pathlib import Path
 
 try:
-    import fitz  # PyMuPDF
+    import fitz
 except ImportError:
     sys.exit("Run: pip install pymupdf")
 
@@ -32,8 +24,6 @@ except ImportError:
     sys.exit("Run: pip install python-docx")
 
 
-# ── PDF helpers ───────────────────────────────────────────────────────────────
-
 def extract_text(pdf_path):
     doc = fitz.open(pdf_path)
     pages = []
@@ -46,7 +36,6 @@ def extract_text(pdf_path):
 
 
 def extract_images(pdf_path, max_images=5, min_w=200, min_h=200):
-    """Extract only the largest images — max 5 per document."""
     doc = fitz.open(pdf_path)
     candidates = []
     for page_num in range(len(doc)):
@@ -73,9 +62,6 @@ def extract_images(pdf_path, max_images=5, min_w=200, min_h=200):
     kept = candidates[:max_images]
     print(f"     {Path(pdf_path).name}: {len(candidates)} images found, using top {len(kept)}")
     return kept
-
-
-# ── AI call ───────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are a building diagnostics specialist writing a Detailed Diagnostic Report (DDR).
 Analyze the inspection and thermal report documents provided and return ONLY valid JSON — no markdown, no extra text.
@@ -110,13 +96,12 @@ JSON_SCHEMA = """
 }"""
 
 
-# Free vision models to try in order — if one fails, next is used
 FREE_VISION_MODELS = [
     "qwen/qwen2.5-vl-72b-instruct:free",
     "qwen/qwen2.5-vl-32b-instruct:free",
     "google/gemma-3-27b-it:free",
     "mistralai/mistral-small-3.1-24b-instruct:free",
-    "openrouter/auto",   # last resort: OpenRouter picks any free vision model
+    "openrouter/auto",
 ]
 
 def call_openrouter(inspection_text, thermal_text, all_images, api_key):
@@ -125,7 +110,6 @@ def call_openrouter(inspection_text, thermal_text, all_images, api_key):
         api_key=api_key,
     )
 
-    # Build message content — text + images interleaved
     content = [
         {
             "type": "text",
@@ -173,8 +157,6 @@ def call_openrouter(inspection_text, thermal_text, all_images, api_key):
         raise RuntimeError(f"All models failed. Last error: {last_error}")
 
     raw = response.choices[0].message.content.strip()
-
-    # Strip markdown fences if present
     if "```" in raw:
         for part in raw.split("```"):
             part = part.strip()
@@ -187,8 +169,6 @@ def call_openrouter(inspection_text, thermal_text, all_images, api_key):
 
     return json.loads(raw)
 
-
-# ── Word document builder ─────────────────────────────────────────────────────
 
 SEVERITY_COLORS = {
     "Critical": RGBColor(0xC0, 0x00, 0x00),
@@ -211,12 +191,8 @@ def build_docx(ddr, all_images, out_path):
         f"Prepared by: AI Diagnostic System"
     )
     doc.add_paragraph()
-
-    # 1. Summary
     doc.add_heading("1. Property Issue Summary", 1)
     doc.add_paragraph(ddr.get("issue_summary", "Not Available"))
-
-    # 2. Area-wise Observations
     doc.add_heading("2. Area-wise Observations", 1)
     for area in ddr.get("areas", []):
         doc.add_heading(area.get("name", "Unknown Area"), 2)
@@ -243,8 +219,6 @@ def build_docx(ddr, all_images, out_path):
             p = doc.add_paragraph()
             p.add_run("Image references: ").bold = True
             p.add_run(" | ".join(refs))
-
-        # Embed matching image
         embedded = False
         for img in all_images:
             ref_combined = " ".join(refs).lower()
@@ -262,15 +236,12 @@ def build_docx(ddr, all_images, out_path):
             doc.add_paragraph("Image Not Available")
 
         doc.add_paragraph()
-
-    # 3. Root Causes
     doc.add_heading("3. Probable Root Cause", 1)
     for rc in ddr.get("root_causes", []):
         p = doc.add_paragraph(style="List Bullet")
         p.add_run(f"{rc.get('issue','')}: ").bold = True
         p.add_run(rc.get("cause", "Not Available"))
 
-    # 4. Severity Table
     doc.add_heading("4. Severity Assessment", 1)
     areas = ddr.get("areas", [])
     if areas:
@@ -285,19 +256,13 @@ def build_docx(ddr, all_images, out_path):
             row[2].text = area.get("severity_reason", "")
     else:
         doc.add_paragraph("Not Available")
-
-    # 5. Recommended Actions
     doc.add_heading("5. Recommended Actions", 1)
     for action in ddr.get("recommended_actions", []):
         p = doc.add_paragraph(style="List Number")
         p.add_run(action.get("action", ""))
         p.add_run(f"  [{action.get('timeline','')}]").italic = True
-
-    # 6. Additional Notes
     doc.add_heading("6. Additional Notes", 1)
     doc.add_paragraph(ddr.get("additional_notes", "Not Available"))
-
-    # 7. Missing Information
     doc.add_heading("7. Missing or Unclear Information", 1)
     missing = ddr.get("missing_information", [])
     if missing:
@@ -310,9 +275,6 @@ def build_docx(ddr, all_images, out_path):
 
     doc.save(out_path)
     print(f"✅  DDR saved to: {out_path}")
-
-
-# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="DDR Report Generator (OpenRouter)")
